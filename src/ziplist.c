@@ -227,24 +227,36 @@
 /* Utility macros.*/
 
 /* Return total bytes a ziplist is composed of. */
+//指向了zlbytes字段
 #define ZIPLIST_BYTES(zl)       (*((uint32_t*)(zl)))
 
 /* Return the offset of the last item inside the ziplist. */
+//向右移动4个字节，指向zltail字段（zlbytes占了4个字节，所以需要+sizeof(uint32_t)）
 #define ZIPLIST_TAIL_OFFSET(zl) (*((uint32_t*)((zl)+sizeof(uint32_t))))
 
 /* Return the length of a ziplist, or UINT16_MAX if the length cannot be
  * determined without scanning the whole ziplist. */
+//向右移动8个字节到达length字段首位（元素的个数）
 #define ZIPLIST_LENGTH(zl)      (*((uint16_t*)((zl)+sizeof(uint32_t)*2)))
 
 /* The size of a ziplist header: two 32 bit integers for the total
  * bytes count and last item offset. One 16 bit integer for the number
  * of items field. */
+//列表头，zlbytes（4字节）+zltail（4字节）+zllen（2字节）=header（4*2+2=10字节）
 #define ZIPLIST_HEADER_SIZE     (sizeof(uint32_t)*2+sizeof(uint16_t))
 
 /* Size of the "end of ziplist" entry. Just one byte. */
+//列表结尾，占1个字节
 #define ZIPLIST_END_SIZE        (sizeof(uint8_t))
 
 /* Return the pointer to the first entry of a ziplist. */
+//指向第一个实体，首位+10字节（首位右移10字节）
+//    |   zl指针的位置
+//   \|/
+//   |-----header----------------------------|
+    /*-------------|------------|------------|------|------|-----|-----------+
+     *zlbytes(4字节)|zltail(4字节)|zllen(2字节)|entry1|entry2|.....|zlend(1字节)|
+     +-------------|------------|------------|------|------|-----|-----------*/
 #define ZIPLIST_ENTRY_HEAD(zl)  ((zl)+ZIPLIST_HEADER_SIZE)
 
 /* Return the pointer to the last entry of a ziplist, using the
@@ -268,22 +280,39 @@
 /* We use this function to receive information about a ziplist entry.
  * Note that this is not how the data is actually encoded, is just what we
  * get filled by a function in order to operate more easily. */
+/**
+ * 解码后的压缩列表元素，定义了7个字段
+ *  |------headersize------------------------------|
+ *  +---------------------|------------------------|---------|--------|---------|--------+
+ *  |previous_entry_length|lensize(encoding字段长度)|prevrawlen|content|len(content内容长度)|
+ *  +---------------------|-----------------------|---------|--------|--------|----------+
+ * /|\
+ *  |  p指针
+ */
 typedef struct zlentry {
+    //prevrawlensize表示previous_entry_length这个字段的长度，加入这个字段是23，那么长度就是2
     unsigned int prevrawlensize; /* Bytes used to encode the previous entry len*/
+    //prevrawlen表示previous_entry_length这个字段存储的内容，比如23，表示前一个元素的字节长度
+    //p-23就是前一个元素的首地址
     unsigned int prevrawlen;     /* Previous entry len. */
+    //lensize表示encoding字段的长度
     unsigned int lensize;        /* Bytes used to encode this entry type/len.
                                     For example strings have a 1, 2 or 5 bytes
                                     header. Integers always use a single byte.*/
+    //len表示元素数据内容的长度，即content的长度
     unsigned int len;            /* Bytes used to represent the actual entry.
                                     For strings this is just the string length
                                     while for integers it is 1, 2, 3, 4, 8 or
                                     0 (for 4 bit immediate) depending on the
                                     number range. */
+    //当前元素首部长度=previous_entry_length字段的长度+encoding字段的长度
     unsigned int headersize;     /* prevrawlensize + lensize. */
+    //encoding表示数据类型
     unsigned char encoding;      /* Set to ZIP_STR_* or ZIP_INT_* depending on
                                     the entry encoding. However for 4 bits
                                     immediate integers this can assume a range
                                     of values and must be range-checked. */
+    //当前元素首地址p
     unsigned char *p;            /* Pointer to the very start of the entry, that
                                     is, this points to prev-entry-len field. */
 } zlentry;
@@ -567,21 +596,28 @@ int64_t zipLoadInteger(unsigned char *p, unsigned char encoding) {
 
 /* Return a struct with all information about an entry. */
 void zipEntry(unsigned char *p, zlentry *e) {
-
+    //解码previous_entry_length字段,此时入参ptr指向元素首地址
     ZIP_DECODE_PREVLEN(p, e->prevrawlensize, e->prevrawlen);
+    //解码encoding字段逻辑， 此时入参ptr指向元素首地址偏移previous_entry_length字段长度的位置
     ZIP_DECODE_LENGTH(p + e->prevrawlensize, e->encoding, e->lensize, e->len);
     e->headersize = e->prevrawlensize + e->lensize;
     e->p = p;
 }
 
 /* Create a new empty ziplist. */
+/**
+ * 新建一个空的压缩列表
+ * @return
+ */
 unsigned char *ziplistNew(void) {
+    //新建的是一个空的压缩列表，只有头和尾，中间的entry此时还没有，所以bytes=4+4+2（头）+1（尾）
     unsigned int bytes = ZIPLIST_HEADER_SIZE+ZIPLIST_END_SIZE;
-    unsigned char *zl = zmalloc(bytes);
-    ZIPLIST_BYTES(zl) = intrev32ifbe(bytes);
+    unsigned char *zl = zmalloc(bytes);//开辟空间
+    ZIPLIST_BYTES(zl) = intrev32ifbe(bytes);//大小端转换，指向首地址（zlbytes是第一个字段）
+    //越过ZIPLIST_HEADER_SIZE后指向最后1个元素，ZIPLIST_HEADER_SIZE就是偏移量
     ZIPLIST_TAIL_OFFSET(zl) = intrev32ifbe(ZIPLIST_HEADER_SIZE);
-    ZIPLIST_LENGTH(zl) = 0;
-    zl[bytes-1] = ZIP_END;
+    ZIPLIST_LENGTH(zl) = 0;//初始化长度为0
+    zl[bytes-1] = ZIP_END;//初始化zlend
     return zl;
 }
 
@@ -740,6 +776,25 @@ unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsigned int
 }
 
 /* Insert item at "p". */
+/**
+ * 插入新元素分三步：
+ * 1、将元素内容编码
+ *   编码即计算previous_entry_length字段、 encoding字段和content字段的内容
+ * 2、重新分配空间
+ * 3、复制数据
+ *
+ * @param zl
+ * @param p
+ * @param s
+ * @param slen
+ * @return
+ *
+ *  |                    |   插入位置p0（zllen后面）
+ * \|/ zl指针            \|/
+ *  +-------|------|-----|-----+
+ *  |zlbytes|zltail|zllen|zlend|
+ *  +-------|------|-----|-----+
+ */
 unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen) {
     size_t curlen = intrev32ifbe(ZIPLIST_BYTES(zl)), reqlen;
     unsigned int prevlensize, prevlen = 0;
@@ -1051,6 +1106,14 @@ unsigned int ziplistGet(unsigned char *p, unsigned char **sstr, unsigned int *sl
 }
 
 /* Insert an entry at "p". */
+/**
+ * 插入一个新元素
+ * @param zl
+ * @param p
+ * @param s
+ * @param slen
+ * @return
+ */
 unsigned char *ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen) {
     return __ziplistInsert(zl,p,s,slen);
 }

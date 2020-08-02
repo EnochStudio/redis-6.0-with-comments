@@ -1,0 +1,40 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/cygdrive/e/mypro/redis6/redis/deps/hiredis/sds.c
+stdio.h
+-
+stdlib.h
+-
+string.h
+-
+ctype.h
+-
+assert.h
+-
+sds.h
+/cygdrive/e/mypro/redis6/redis/deps/hiredis/sds.h
+sdsalloc.h
+/cygdrive/e/mypro/redis6/redis/deps/hiredis/sdsalloc.h
+stdio.h
+-
+testhelp.h
+/cygdrive/e/mypro/redis6/redis/deps/hiredis/testhelp.h
+limits.h
+/cygdrive/e/mypro/redis6/redis/deps/hiredis/limits.h
+
+/cygdrive/e/mypro/redis6/redis/deps/hiredis/sds.h
+sys/types.h
+-
+stdarg.h
+-
+stdint.h
+-
+
+/cygdrive/e/mypro/redis6/redis/deps/hiredis/sdsalloc.h
+

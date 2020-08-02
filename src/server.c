@@ -5002,21 +5002,35 @@ int main(int argc, char **argv) {
 #ifdef INIT_SETPROCTITLE_REPLACEMENT
     spt_init(argc, argv);
 #endif
+    //设置本地语言环境
     setlocale(LC_COLLATE,"");
+    //设置时区
     tzset(); /* Populates 'timezone' global. */
+    //设置内存分配失败后的回调函数，如果不主动设置回调函数，
+    // redis将会会记录文件“zmalloc:Out of memory trying to allocate xxxbytes”，
+    // 并退出线程。在这里，redis没有使用默认处理方式，而是选择记录Log，并主动报告一个OMM错误。
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
+    //用当前时间随机种子值，用当前时间与进程ID进行按位异或，增大随机种子的随机概率。
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
+    //循环冗余检验，64位CRC校验码的算法初始化
     crc64_init();
 
     uint8_t hashseed[16];
     getRandomBytes(hashseed,sizeof(hashseed));
     dictSetHashFunctionSeed(hashseed);
+    //启动模式检查，服务器是否用监视模式运行，监视模式下，redis将记录监视主节点(master nodes)的一些数据。
+    //这个函数如果第一个参数是"redis-sentinel"，或者其他参数中有“--sentinel”都会返还1,否则0。
     server.sentinel_mode = checkForSentinelMode(argc,argv);
+    //初始化服务器配置。配置内容很多，详细介绍见下文。
     initServerConfig();
+    //6.x版本新增功能：访问控制列表(ACL)是一种基于包过滤的访问控制技术,极大的提高了redis的安全性
+    //功能演示参考：https://www.cnblogs.com/architectforest/p/12836843.html
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
+    //模块化初始化
     moduleInitModulesSystem();
+    //openssl之tls初始化
     tlsInit();
 
     /* Store the executable path and arguments in a safe place in order
@@ -5029,6 +5043,7 @@ int main(int argc, char **argv) {
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
      * data structures with master nodes to monitor. */
+    //初始化哨兵，对master进行监控
     if (server.sentinel_mode) {
         initSentinelConfig();
         initSentinel();
@@ -5037,6 +5052,7 @@ int main(int argc, char **argv) {
     /* Check if we need to start in redis-check-rdb/aof mode. We just execute
      * the program main. However the program is part of the Redis executable
      * so that we can easily execute an RDB check on loading errors. */
+    //检查持久化方式
     if (strstr(argv[0],"redis-check-rdb") != NULL)
         redis_check_rdb_main(argc,argv,NULL);
     else if (strstr(argv[0],"redis-check-aof") != NULL)

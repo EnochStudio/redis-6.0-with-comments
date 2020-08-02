@@ -68,44 +68,86 @@ int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Create a skiplist node with the specified number of levels.
  * The SDS string 'ele' is referenced by the node after the call. */
+/**
+ * 新建一个指定层高的跳跃表节点（指定层高，分值，元素）
+ * @param level
+ * @param score
+ * @param ele
+ * @return
+ */
 zskiplistNode *zslCreateNode(int level, double score, sds ele) {
+    /**
+     * 这里不太容易理解
+     * 1、首先
+     * zskiplistNode *zn =
+     *   zmalloc(sizeof(*zn)+level*sizeof(struct zskiplistLevel));
+     *   这句代码中
+     *   sizeof(*zn)中的*zn是哪里的？？其实相当于是：
+     *   zskiplistNode *zn ；
+     *   *zn=zmalloc(sizeof(*zn)+level*sizeof(struct zskiplistLevel));
+     *   zn表示的就是zskiplistNode这个结构体。
+     *
+     *   2、其次内存分配大小为什么是zskiplistNode结构体
+     *   大小+这个结构体的内部结构zskiplistLevel*level？？
+     *   答：zskiplistLevel是zskiplistNode结构体中的柔性数组，所以g++编译的时候，他的内存大小
+     *   是0，这个也比较容易理解：因为是柔性数组，数组大小不确定，所以开辟内存大小为0.
+     *   所以必须单独计算：层数（也就是level，即数组个数）*zskiplistLevel（单个数组）
+     *   那么再加上zskiplistNode结构体大小（g++编译时数组部分是0，所以实际大小是除数组以外的空间），
+     *   正好是整个节点的内存空间大小
+     *
+     */
     zskiplistNode *zn =
         zmalloc(sizeof(*zn)+level*sizeof(struct zskiplistLevel));
-    zn->score = score;
-    zn->ele = ele;
+    zn->score = score;//赋分值
+    zn->ele = ele;//赋元素(sds结构)
     return zn;
 }
 
 /* Create a new skiplist. */
+/**
+ * 初始化一个skiplist
+ * @return
+ */
 zskiplist *zslCreate(void) {
     int j;
     zskiplist *zsl;
-
+    //先开辟内存空间
     zsl = zmalloc(sizeof(*zsl));
-    zsl->level = 1;
-    zsl->length = 0;
+    zsl->level = 1;//初始值为1，（最底层，也就是level0），层数level就是1
+    zsl->length = 0;//节点数为0（初始化时还没有节点）
+    //头指针指向的是头节点（这里要结合示意图理解），头结点不是真正的有效节点，头节点有32层结构，分值是0，元素是null
     zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL,0,NULL);
+    //每层初始化(看示意图)，前向指针指向null（因为有效节点还没有创建），跨度也是0
     for (j = 0; j < ZSKIPLIST_MAXLEVEL; j++) {
         zsl->header->level[j].forward = NULL;
         zsl->header->level[j].span = 0;
     }
-    zsl->header->backward = NULL;
-    zsl->tail = NULL;
+    zsl->header->backward = NULL;//头结点的后向指针为null
+    zsl->tail = NULL;//尾指针是null
     return zsl;
 }
 
 /* Free the specified skiplist node. The referenced SDS string representation
  * of the element is freed too, unless node->ele is set to NULL before calling
  * this function. */
+/**
+ * 释放单个节点
+ * @param node
+ */
 void zslFreeNode(zskiplistNode *node) {
     sdsfree(node->ele);
     zfree(node);
 }
 
 /* Free a whole skiplist. */
+/**
+ * 删除整张跳表
+ * @param zsl
+ */
 void zslFree(zskiplist *zsl) {
     zskiplistNode *node = zsl->header->level[0].forward, *next;
-
+    //删除逻辑：从头节点的第0层开始依次往后，next指向下面一个节点，然后释放前面一个节点，
+    // 释放完之后，node再次指向next所指向的节点，然后进入下一轮询，最后全部释放
     zfree(zsl->header);
     while(node) {
         next = node->level[0].forward;
@@ -119,6 +161,10 @@ void zslFree(zskiplist *zsl) {
  * The return value of this function is between 1 and ZSKIPLIST_MAXLEVEL
  * (both inclusive), with a powerlaw-alike distribution where higher
  * levels are less likely to be returned. */
+/**
+ * 随机生成层高level，这个层高可能比原来的高
+ * @return
+ */
 int zslRandomLevel(void) {
     int level = 1;
     while ((random()&0xFFFF) < (ZSKIPLIST_P * 0xFFFF))
@@ -129,16 +175,35 @@ int zslRandomLevel(void) {
 /* Insert a new node in the skiplist. Assumes the element does not already
  * exist (up to the caller to enforce that). The skiplist takes ownership
  * of the passed SDS string 'ele'. */
+/**
+ * 跳表插入一个节点
+ * 参照图解：https://wiki.jikexueyuan.com/project/redis/skiplist.html
+ * 这个博文的图示比较细致，可以参考
+ * @param zsl
+ * @param score
+ * @param ele
+ * @return
+ */
 zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned int rank[ZSKIPLIST_MAXLEVEL];
     int i, level;
 
     serverAssert(!isnan(score));
-    x = zsl->header;
+    x = zsl->header;//x指向头节点
+    //从最高层开始扫描
     for (i = zsl->level-1; i >= 0; i--) {
         /* store rank that is crossed to reach the insert position */
+        //上方英文解释很清楚，rank数组里放的是从头节点到插入点的跨度
         rank[i] = i == (zsl->level-1) ? 0 : rank[i+1];
+        /**
+         * 沿着头节点，安装forward指针的方向一路比较，如果当前节点score<待插入节点的score，
+         * 或者socre相等，则比较ele元素的字典大小，如果当前节点ele字典大小<待插入节点的ele值。
+         *
+         * 则继续向前比较，每次比较后rank[i]做跨度累加，x指针forward方向位移，这样一直位移到待插入位置
+         * update[i]表示待插入位置的节点，rank[i]表示头结点到待插入节点的跨度。
+         *
+         */
         while (x->level[i].forward &&
                 (x->level[i].forward->score < score ||
                     (x->level[i].forward->score == score &&
@@ -153,58 +218,133 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
      * scores, reinserting the same element should never happen since the
      * caller of zslInsert() should test in the hash table if the element is
      * already inside or not. */
+    /**
+     * 如果插入节点的层高比当前跳表的层高还要高，
+     * 这时候需要对额外高出的层做设置
+     */
     level = zslRandomLevel();
     if (level > zsl->level) {
+        //循环对高出的层做设置，例如新节点层高是5(level[0]...level[4])，当前跳表层高是2(level[0]-level[1])，
+        //那么就对level[2].level[3].level[4]这三层做设置
         for (i = zsl->level; i < level; i++) {
-            rank[i] = 0;
-            update[i] = zsl->header;
-            update[i]->level[i].span = zsl->length;
+            rank[i] = 0;//只有头节点，所以rank[i]是0
+            update[i] = zsl->header;//插入位置只能是头节点后面
+            update[i]->level[i].span = zsl->length;//头节点的跨度设置为当前跳表长度（后续会重新计算）
         }
-        zsl->level = level;
+        zsl->level = level;//将最高层数赋值给当前跳表的层高
     }
+    //开始新建这个节点，预备插入（前面的过程都是在找插入位置）
     x = zslCreateNode(level,score,ele);
+    /**
+     * 从最底层开始一次往上一层一层的插入（插入操作实际就是普通链表插入操作）
+     * 新节点xforward指针指向update节点forward所指向的节点，然后让update节点forward指向x节点(典型的链表插入)
+     *
+     */
     for (i = 0; i < level; i++) {
         x->level[i].forward = update[i]->level[i].forward;
         update[i]->level[i].forward = x;
 
         /* update span covered by update[i] as x is inserted here */
+        /**
+         * 这部分不太容易理解（借助于图示理解）
+         * update节点到下个节点的跨度是update[i]->level[i].span。此时x节点要插入到update节点之后
+         * 那么就是相当于x到下个节点的跨度就是update[i]->level[i].span减去某段距离（肯定是跨度更小了）
+         * 那么究竟小多少？？
+         * 就是rank[0] - rank[i]：这段的意思是最底层待插入节点的跨度减去每一层待插入节点的跨度，这就是多
+         * 出来的，所以要减掉
+         *
+         * 250行的计算全式应该是这样的（https://blog.csdn.net/u013536232/article/details/105476382）
+         * 示意图：假如，8，9,10，11,12.在9,10直接插入9.5
+         * 8------------------------------------------------------------------12   level2
+         * 8--------------------------9.5------------------------11-----------12   level1
+         * 8------------9-------------9.5-----------10-----------11-----------12   level0
+         * 解释：
+         * 一、等号左边
+         * 1表示9-9.5之间的跨度（也就是1个节点的跨度）
+         * update[i]->level[i].span表示插入点8到12之间的跨度（level1是8-12跨度，level0是9-12跨度）
+         *
+         * 二、等号右边
+         * 假如是level0，那么就是rank[0]表示9节点到header之间的跨度，rank[i]这时候i=0,所以
+         * rank[0] - rank[i]=0
+         * 1表示9-9.5直接的跨度
+         * x->level[i].span表示新增节点x到12之间的跨度
+         *
+         * (update[i]->level[i].span)+1=(rank[0] - rank[i])+1+(x->level[i].span)
+         * 所以继续往下演变成  |
+         *                 |
+         *                \/                                           */
         x->level[i].span = update[i]->level[i].span - (rank[0] - rank[i]);
+        //update[i]->level[i].span相当于是update节点到x节点的跨度
         update[i]->level[i].span = (rank[0] - rank[i]) + 1;
     }
 
     /* increment span for untouched levels */
+    /**
+     * 所有未涉及到的level都应该在对应的update[i]节点后面加1（以为下面层里都已经相当于多了1个节点了）
+     * 还以上图为例子。假如层高是2，则第三层（level2实际9.5没有插入），但是从update[i]=8这个节点往后的
+     * span都应该+1
+     */
     for (i = level; i < zsl->level; i++) {
         update[i]->level[i].span++;
     }
 
+    //设置后向指针：x新节点的后向指针指向update[i](新节点的前一个)；
     x->backward = (update[0] == zsl->header) ? NULL : update[0];
+    //如果新节点不是在尾部插入的，那么他的后面一个节点的后向指针指向新节点x
     if (x->level[0].forward)
         x->level[0].forward->backward = x;
+    //如果是在尾部插入
     else
+        //直接将尾指针指向x
         zsl->tail = x;
+    //全部搞定，跳表长度+1
     zsl->length++;
     return x;
 }
 
 /* Internal function used by zslDelete, zslDeleteRangeByScore and
  * zslDeleteRangeByRank. */
+/**
+ * 指定删除x节点
+ * @param zsl
+ * @param x
+ * @param update
+ */
 void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
     int i;
     for (i = 0; i < zsl->level; i++) {
+        /**
+         * 扫描每一层，如果update[i]的下一个节点正好是要删除的x，那么
+         * 假如要删除9.5，如下示意图：
+         *
+         * 8----------9----------9.5---------10--------11
+         *
+         * 那么9就是update[i],9.5就是x，去除9.5之后的update的新span就是 update[i]+x-1
+         * 这个1就是9.5的跨度，现在删除了，那么跨度就减去1
+         * 后把x节点后面的节点赋值给update的forward，相当于从9--》指向10了
+         */
         if (update[i]->level[i].forward == x) {
             update[i]->level[i].span += x->level[i].span - 1;
             update[i]->level[i].forward = x->level[i].forward;
         } else {
+            //这里的逻辑和插入节点那里高出9.5层高的思路是一样的，新增是++，那么这里删除就是--
             update[i]->level[i].span -= 1;
         }
     }
+    /**
+     * 设置后向指针
+     */
     if (x->level[0].forward) {
+        //x前向节点的后向指针指向x的后向指针（x的后向指针指向的是x的前面一个节点，也就是跨过x了）
         x->level[0].forward->backward = x->backward;
     } else {
+        //如果x是尾节点，则tail指针指向x前面一个节点（这个节点此时就是尾节点了）
         zsl->tail = x->backward;
     }
+    //头节点后面已经没有节点了（forward指向null），则这层可以去掉了，所以zsl->level--
     while(zsl->level > 1 && zsl->header->level[zsl->level-1].forward == NULL)
         zsl->level--;
+    //删除完跳表长度-1
     zsl->length--;
 }
 
@@ -221,6 +361,10 @@ int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node) {
     int i;
 
     x = zsl->header;
+    /**
+     * 每层开始从头节点开始查找，找到要删除的节点的前一个节点，存入update[i]
+     * 后续要设置他们的span和forward
+     */
     for (i = zsl->level-1; i >= 0; i--) {
         while (x->level[i].forward &&
                 (x->level[i].forward->score < score ||
@@ -235,9 +379,10 @@ int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node) {
      * is to find the element with both the right score and object. */
     x = x->level[0].forward;
     if (x && score == x->score && sdscmp(x->ele,ele) == 0) {
+        //找到这个x节点之后开始删除
         zslDeleteNode(zsl, x, update);
         if (!node)
-            zslFreeNode(x);
+            zslFreeNode(x);//释放x节点的内存空间
         else
             *node = x;
         return 1;
@@ -1360,7 +1505,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
             zobj->ptr = zzlInsert(zobj->ptr,ele,score);
             if (zzlLength(zobj->ptr) > server.zset_max_ziplist_entries ||
                 sdslen(ele) > server.zset_max_ziplist_value)
-                zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
+                zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);//压缩列表转换为跳跃表
             if (newscore) *newscore = score;
             *flags |= ZADD_ADDED;
             return 1;
@@ -1603,9 +1748,9 @@ void zaddGenericCommand(client *c, int flags) {
         if (server.zset_max_ziplist_entries == 0 ||
             server.zset_max_ziplist_value < sdslen(c->argv[scoreidx+1]->ptr))
         {
-            zobj = createZsetObject();
+            zobj = createZsetObject();//创建的跳跃表结构
         } else {
-            zobj = createZsetZiplistObject();
+            zobj = createZsetZiplistObject();//创建的压缩表结构
         }
         dbAdd(c->db,key,zobj);
     } else {

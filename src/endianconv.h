@@ -45,14 +45,14 @@ uint64_t intrev64(uint64_t v);
 
 /* variants of the function doing the actual conversion only if the target
  * host is big endian */
-#if (BYTE_ORDER == LITTLE_ENDIAN)
+#if (BYTE_ORDER == LITTLE_ENDIAN)// 如果是小端存储，什么也不做
 #define memrev16ifbe(p) ((void)(0))
 #define memrev32ifbe(p) ((void)(0))
 #define memrev64ifbe(p) ((void)(0))
 #define intrev16ifbe(v) (v)
 #define intrev32ifbe(v) (v)
 #define intrev64ifbe(v) (v)
-#else
+#else// 如果是大端存储的话对内存中的存储和值的表示进行一个大小端的转换
 #define memrev16ifbe(p) memrev16(p)
 #define memrev32ifbe(p) memrev32(p)
 #define memrev64ifbe(p) memrev64(p)

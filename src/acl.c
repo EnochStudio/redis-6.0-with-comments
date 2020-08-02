@@ -937,6 +937,9 @@ void ACLInitDefaultUser(void) {
 }
 
 /* Initialization of the ACL subsystem. */
+/**
+ * 访问控制列表(ACL)是一种基于包过滤的访问控制技术
+ */
 void ACLInit(void) {
     Users = raxNew();
     UsersToLoad = listCreate();

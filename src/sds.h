@@ -33,6 +33,11 @@
 #ifndef __SDS_H
 #define __SDS_H
 
+/**
+ * 最大预分配长度
+ * 参考：https://www.jianshu.com/p/0282f81b26dc
+ * 1024*1024=1M
+ */
 #define SDS_MAX_PREALLOC (1024*1024)
 extern const char *SDS_NOINIT;
 
@@ -42,30 +47,60 @@ extern const char *SDS_NOINIT;
 
 typedef char *sds;
 
+/**
+ * 预定义了5种类型的结构体
+ */
 /* Note: sdshdr5 is never used, we just access the flags byte directly.
  * However is here to document the layout of type 5 SDS strings. */
+/**
+ * 小于一个字节长度
+ */
 struct __attribute__ ((__packed__)) sdshdr5 {
     unsigned char flags; /* 3 lsb of type, and 5 msb of string length */
     char buf[];
 };
+
+/**
+ * 1个字节长度
+ */
 struct __attribute__ ((__packed__)) sdshdr8 {
     uint8_t len; /* used */
     uint8_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
     char buf[];
 };
+
+/**
+ * 2个字节长度
+ */
 struct __attribute__ ((__packed__)) sdshdr16 {
     uint16_t len; /* used */
     uint16_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
     char buf[];
 };
+
+/**
+ * 4个字节长度
+ */
 struct __attribute__ ((__packed__)) sdshdr32 {
     uint32_t len; /* used */
     uint32_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
     char buf[];
 };
+
+/**
+ * 最大8个字节长度
+ *
+ * len：已经使用的字节长度
+ * alloc：总共分配的字节长度
+ * flags：该字段在小于1个字节长度的结构体中用来存放类型（5种类型，起码需要3位，2的3次方=8），后5位表示字符串长度，最大2的5次方
+ * 也就是0-31
+ *
+ * 如果大于1字节则flags的高5位是空闲的。长度用len和alloc来表示。所以这就是sdshdr5和其他几个结构体的差别
+ *
+ */
 struct __attribute__ ((__packed__)) sdshdr64 {
     uint64_t len; /* used */
     uint64_t alloc; /* excluding the header and null terminator */
@@ -80,15 +115,25 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 #define SDS_TYPE_64 4
 #define SDS_TYPE_MASK 7
 #define SDS_TYPE_BITS 3
+//s 表示指向buf的的指针，s-sizeof（xx）表示指针左移固定结构体的长度（5种结构体），正好移动到结构体的头部，然后指针赋给sh
 #define SDS_HDR_VAR(T,s) struct sdshdr##T *sh = (void*)((s)-(sizeof(struct sdshdr##T)));
+//同上，只不过没有赋值
 #define SDS_HDR(T,s) ((struct sdshdr##T *)((s)-(sizeof(struct sdshdr##T))))
 #define SDS_TYPE_5_LEN(f) ((f)>>SDS_TYPE_BITS)
 
+/**
+ * 已经填充的字符长度
+ * @param s
+ * @return
+ */
 static inline size_t sdslen(const sds s) {
-    unsigned char flags = s[-1];
+    unsigned char flags = s[-1];//s表示字符串数组的起始位置。由于内存紧密相连，所以这样表示指针指向的是flags
     switch(flags&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
-            return SDS_TYPE_5_LEN(flags);
+            return SDS_TYPE_5_LEN(flags);//右移3位，从高5位获取长度
+            /**
+             * 以下4种类型的长度获取方式是一样的
+             */
         case SDS_TYPE_8:
             return SDS_HDR(8,s)->len;
         case SDS_TYPE_16:
@@ -101,12 +146,21 @@ static inline size_t sdslen(const sds s) {
     return 0;
 }
 
+/**
+ * 字符数组里还剩下的可用空间
+ * @param s
+ * @return
+ */
 static inline size_t sdsavail(const sds s) {
+    //s表示字符串数组的起始位置。由于内存紧密相连，所以这样表示指针指向的是flags
     unsigned char flags = s[-1];
     switch(flags&SDS_TYPE_MASK) {
         case SDS_TYPE_5: {
             return 0;
         }
+        /**
+         * 总共分配的-已经分配的=剩下可用的
+         */
         case SDS_TYPE_8: {
             SDS_HDR_VAR(8,s);
             return sh->alloc - sh->len;
@@ -127,6 +181,11 @@ static inline size_t sdsavail(const sds s) {
     return 0;
 }
 
+/**
+ * 设置结构体len值
+ * @param s
+ * @param newlen
+ */
 static inline void sdssetlen(sds s, size_t newlen) {
     unsigned char flags = s[-1];
     switch(flags&SDS_TYPE_MASK) {
@@ -151,6 +210,11 @@ static inline void sdssetlen(sds s, size_t newlen) {
     }
 }
 
+/**
+ * 长度+inc
+ * @param s
+ * @param inc
+ */
 static inline void sdsinclen(sds s, size_t inc) {
     unsigned char flags = s[-1];
     switch(flags&SDS_TYPE_MASK) {
@@ -176,6 +240,11 @@ static inline void sdsinclen(sds s, size_t inc) {
     }
 }
 
+/**
+ * 返回alloc值
+ * @param s
+ * @return
+ */
 /* sdsalloc() = sdsavail() + sdslen() */
 static inline size_t sdsalloc(const sds s) {
     unsigned char flags = s[-1];
@@ -194,6 +263,11 @@ static inline size_t sdsalloc(const sds s) {
     return 0;
 }
 
+/**
+ * 重新设置alloc长度
+ * @param s
+ * @param newlen
+ */
 static inline void sdssetalloc(sds s, size_t newlen) {
     unsigned char flags = s[-1];
     switch(flags&SDS_TYPE_MASK) {

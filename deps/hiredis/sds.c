@@ -78,27 +78,44 @@ static inline char sdsReqType(size_t string_size) {
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
+
+/**
+ * 创建字符串，传入初始化指针和初始化长度
+ * @param init
+ * @param initlen
+ * @return
+ */
 sds sdsnewlen(const void *init, size_t initlen) {
     void *sh;
     sds s;
+    //根据长度设置sds类型
     char type = sdsReqType(initlen);
     /* Empty strings are usually created in order to append. Use type 8
      * since type 5 is not good at this. */
+    /**
+     *
+     * 当前是SDS_TYPE_5类型且对于空字符串来说，SDS_TYPE_5强制转化为SDS_TYPE_8。
+     * 这是因为创建的空字符串一般接下来的操作很可能是
+     * 追加数据，但SDS_TYPE_5类型的sds字符串不适合追加数据（会引发内存重新分配）
+     */
     if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
+    //不同类型头部需要不同的长度:1,2,4,8
     int hdrlen = sdsHdrSize(type);
-    unsigned char *fp; /* flags pointer. */
+    unsigned char *fp; /* flags pointer. *///指向flags的指针
 
-    sh = s_malloc(hdrlen+initlen+1);
+    sh = s_malloc(hdrlen+initlen+1);//开辟内存空间（头部长度+初始化长度+结尾符'\0'的长度1），然后sh指针指向头部
     if (sh == NULL) return NULL;
     if (!init)
-        memset(sh, 0, hdrlen+initlen+1);
-    s = (char*)sh+hdrlen;
-    fp = ((unsigned char*)s)-1;
+        memset(sh, 0, hdrlen+initlen+1);//重新清空内存, 目的就是void *sh; 是未知的,所以需要清空, 不然会有不明字符串出现
+    s = (char*)sh+hdrlen;//sh指针右移hdrlen的长度，也就是越过头部，直接指向柔性数组，s就是结构体内部数组的指针
+    fp = ((unsigned char*)s)-1;//-1操作就是s指针左移1位，正好执行flags，所以fg就是flags的指针
     switch(type) {
+        //SDS_TYPE_5 有单独的初始化方案
         case SDS_TYPE_5: {
             *fp = type | (initlen << SDS_TYPE_BITS);
             break;
         }
+        //其他类型通过SDS_HDR_VAR函数获取头部信息，并逐步初始化（初始化len，alloc，flags，s数组）
         case SDS_TYPE_8: {
             SDS_HDR_VAR(8,s);
             sh->len = initlen;
@@ -128,14 +145,19 @@ sds sdsnewlen(const void *init, size_t initlen) {
             break;
         }
     }
+    //根据init与initlen，将内容复制给字符串
     if (initlen && init)
         memcpy(s, init, initlen);
-    s[initlen] = '\0';
+    s[initlen] = '\0';//添加末尾的结束符
     return s;
 }
 
 /* Create an empty (zero length) sds string. Even in this case the string
  * always has an implicit null term. */
+/**
+ * 创建空字符串
+ * @return
+ */
 sds sdsempty(void) {
     return sdsnewlen("",0);
 }
@@ -152,8 +174,13 @@ sds sdsdup(const sds s) {
 }
 
 /* Free an sds string. No operation is performed if 's' is NULL. */
+/**
+ * 释放字符串
+ * @param s
+ */
 void sdsfree(sds s) {
     if (s == NULL) return;
+    //s[-1]表示flags，从而得知类型，然后根据类型获取头部长度，指针左移头部长度抵达结构体首位，然后通过s_free释放。
     s_free((char*)s-sdsHdrSize(s[-1]));
 }
 
@@ -180,9 +207,14 @@ void sdsupdatelen(sds s) {
  * However all the existing buffer is not discarded but set as free space
  * so that next append operations will not require allocations up to the
  * number of bytes previously available. */
+/**
+ * 为了优化性能（减少申请内存的开销），SDS提供了不直接释放内存的操作，而是通过重置统计值达到清空的目的
+ * 该方法将len清零，但是buf内存并没有释放，新数据会覆盖写，而不用重新申请内存
+ * @param s
+ */
 void sdsclear(sds s) {
-    sdssetlen(s, 0);
-    s[0] = '\0';
+    sdssetlen(s, 0);//实际长度归0
+    s[0] = '\0';//清空buf
 }
 
 /* Enlarge the free space at the end of the sds string so that the caller

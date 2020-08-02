@@ -41,6 +41,7 @@
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 
+//获取结构体头部大小
 static inline int sdsHdrSize(char type) {
     switch(type&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
@@ -57,7 +58,13 @@ static inline int sdsHdrSize(char type) {
     return 0;
 }
 
+/**
+ * 根据长度确定类型
+ * @param string_size
+ * @return
+ */
 static inline char sdsReqType(size_t string_size) {
+    //1左移5位后>string_size,说明长度小于2的5次方，即字符长度在0-31之间
     if (string_size < 1<<5)
         return SDS_TYPE_5;
     if (string_size < 1<<8)
@@ -201,48 +208,67 @@ void sdsclear(sds s) {
  *
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
+/**
+ * 扩容策略
+ * @param s
+ * @param addlen
+ * @return
+ */
 sds sdsMakeRoomFor(sds s, size_t addlen) {
     void *sh, *newsh;
-    size_t avail = sdsavail(s);
+    size_t avail = sdsavail(s);//获取剩余长度
     size_t len, newlen;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen;
 
     /* Return ASAP if there is enough space left. */
-    if (avail >= addlen) return s;
+    if (avail >= addlen) return s;//如果空余长度大于扩容的长度，则说明长度足够，直接返回
 
-    len = sdslen(s);
-    sh = (char*)s-sdsHdrSize(oldtype);
-    newlen = (len+addlen);
+    /**
+     * 以下是空余长度不够扩容的情况
+     */
+    len = sdslen(s);//获取当前字符串已经占据的长度
+    sh = (char*)s-sdsHdrSize(oldtype);//指针位移到结构体首位
+    newlen = (len+addlen);//新长度=已经使用的+要扩容的
+    /**
+     * SDS_MAX_PREALLOC=1M
+     * 如果新长度<1M,那么真正的新的长度=新长度*2倍 进行扩容
+     * 否则，真正的新长度=新长度+1M 进行扩容
+     */
     if (newlen < SDS_MAX_PREALLOC)
         newlen *= 2;
     else
         newlen += SDS_MAX_PREALLOC;
-
+    //根据新长度获取当前sds的类型（5个类型之一）
     type = sdsReqType(newlen);
 
     /* Don't use type 5: the user is appending to the string and type 5 is
      * not able to remember empty space, so sdsMakeRoomFor() must be called
      * at every appending operation. */
-    if (type == SDS_TYPE_5) type = SDS_TYPE_8;
+    if (type == SDS_TYPE_5) type = SDS_TYPE_8;//如果是type5，直接转成type8
 
     hdrlen = sdsHdrSize(type);
     if (oldtype==type) {
-        newsh = s_realloc(sh, hdrlen+newlen+1);
+        newsh = s_realloc(sh, hdrlen+newlen+1);//如果类型不变，直接扩大buf，指针回到首部
         if (newsh == NULL) return NULL;
-        s = (char*)newsh+hdrlen;
+        s = (char*)newsh+hdrlen;//s指针=首位+头部长度（首指针位移头部长度后指向buf）
     } else {
         /* Since the header size changes, need to move the string forward,
          * and can't use realloc */
+        /**
+         * 扩容后类型发生了变化，此时不能使用s_realloc了。需要重新开辟空间
+         * s_malloc按长度重新开辟内存
+         */
         newsh = s_malloc(hdrlen+newlen+1);
         if (newsh == NULL) return NULL;
+        //将原s指向的buf重新移动到新位置（新位置指针为(char*)newsh+hdrlen）
         memcpy((char*)newsh+hdrlen, s, len+1);
-        s_free(sh);
-        s = (char*)newsh+hdrlen;
-        s[-1] = type;
-        sdssetlen(s, len);
+        s_free(sh);//释放旧指针
+        s = (char*)newsh+hdrlen;//位移到新的sds的buf起始位置
+        s[-1] = type;//类型赋给flags
+        sdssetlen(s, len);//设置len
     }
-    sdssetalloc(s, newlen);
+    sdssetalloc(s, newlen);//设置alloc
     return s;
 }
 
