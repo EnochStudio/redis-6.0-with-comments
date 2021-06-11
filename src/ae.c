@@ -533,6 +533,10 @@ int aeWait(int fd, int mask, long long milliseconds) {
     }
 }
 
+/**
+ * 主循环
+ * @param eventLoop
+ */
 void aeMain(aeEventLoop *eventLoop) {
     eventLoop->stop = 0;
     while (!eventLoop->stop) {
